@@ -6,7 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D, art3d
 import matplotlib.patches as patches
 
 # Global lists for simulation objects
-fires, drones, scattered_fuel = [], [], []
+fires, drones, scattered_fuel, helicopters = [], [], [], []
 
 class Fuel:
     def __init__(self, env, durability, location, fuel_type="Generic"):
@@ -133,6 +133,58 @@ class DroneBase:
         self.location = (location[0], location[1], 0)  # Ensure the base is on the ground
         print(f"Drone base initialized at location {self.location}.")
 
+class Helicopter:
+    def __init__(self, env, name, start_location):
+        self.env = env
+        self.name = name
+        self.location = (start_location[0], start_location[1], 5)  # Start at z=5
+        self.radius = 0.5  # Represent helicopters as small spheres
+        helicopters.append(self)
+        self.env.process(self.fly_to_fire())
+
+    def fly_to_fire(self):
+        while True:
+            if fires:
+                # Find the nearest fire
+                nearest_fire = min(fires, key=lambda fire: ((self.location[0] - fire.location[0]) ** 2 +
+                                                            (self.location[1] - fire.location[1]) ** 2 +
+                                                            (self.location[2] - fire.location[2]) ** 2) ** 0.5)
+                # Move towards the fire at a constant speed of 2 units per step
+                direction = (
+                    nearest_fire.location[0] - self.location[0],
+                    nearest_fire.location[1] - self.location[1],
+                    nearest_fire.location[2] - self.location[2]
+                )
+                magnitude = (direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2) ** 0.5
+                if magnitude > 0:
+                    # Calculate step size (don't overshoot)
+                    step_size = min(2, magnitude)  # 2 units max per step
+                    
+                    # Move towards the fire
+                    self.location = (
+                        self.location[0] + step_size * direction[0] / magnitude,
+                        self.location[1] + step_size * direction[1] / magnitude,
+                        self.location[2]  # Maintain altitude at z=5
+                    )
+                print(f"Time {self.env.now}: {self.name} is flying towards fire at {nearest_fire.location}. Current location: {self.location}")
+
+                # Check if the helicopter is at the fire's location
+                if magnitude <= 2:
+                    print(f"Time {self.env.now}: {self.name} is extinguishing fire at {nearest_fire.location}.")
+                    nearest_fire.stop_fire()
+                    fires.remove(nearest_fire)
+            else:
+                # Fly randomly if no fires are present
+                direction = (random.uniform(-1, 1), random.uniform(-1, 1), 0)
+                magnitude = (direction[0] ** 2 + direction[1] ** 2) ** 0.5
+                self.location = (
+                    self.location[0] + 2 * direction[0] / magnitude,
+                    self.location[1] + 2 * direction[1] / magnitude,
+                    self.location[2]
+                )
+                print(f"Time {self.env.now}: {self.name} is flying randomly. Current location: {self.location}")
+            yield self.env.timeout(1)
+
 fig, ax_3d = None, None
 main_road_coordinates = [(x, 0) for x in range(-10, 11)]  # Main road along the X-axis
 side_road_coordinates = [(0, y) for y in range(-5, 6)]  # Side road along the Y-axis branching from the main road
@@ -206,6 +258,13 @@ def update_plot():
             circle = plt.Circle((x, y), 0.5, color='black', alpha=0.5)
             ax_3d.add_patch(circle)
             art3d.pathpatch_2d_to_3d(circle, z=0, zdir="z")
+    for helicopter in helicopters:
+        x, y, z = helicopter.location
+        u, v = np.mgrid[0:2 * np.pi:20j, 0:np.pi:10j]
+        sphere_x = helicopter.radius * np.cos(u) * np.sin(v) + x
+        sphere_y = helicopter.radius * np.sin(u) * np.sin(v) + y
+        sphere_z = helicopter.radius * np.cos(v) + z
+        ax_3d.plot_surface(sphere_x, sphere_y, sphere_z, color='yellow', alpha=0.7)
     fig.canvas.draw()
     fig.canvas.flush_events()
 
@@ -214,7 +273,7 @@ def update_plot():
 def scatter_random_objects(env):
     placed_houses = set()  # Track placed house locations to avoid overlap
 
-    for _ in range(50):
+    for _ in range(100):
         durability = random.randint(5, 15)
         fuel_type = random.choice(["house", "bush", "tree"])
 
@@ -277,7 +336,11 @@ drone_base = DroneBase(location=base_location)
 Drone(env, name="Drone 1", battery_life=20, wind_speed=2, start_location=base_location)
 Drone(env, name="Drone 2", battery_life=20, wind_speed=2, start_location=base_location)
 
-for step in range(100):
+# Initialize helicopters
+for i in range(2):  # Add 2 helicopters
+    helicopters.append(Helicopter(env, name=f"Helicopter {i+1}", start_location=(0, 0)))
+
+for step in range(200):
     env.step()
     update_plot()
     print(f"Simulation step {step + 1} completed.")
