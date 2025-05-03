@@ -11,6 +11,9 @@ from gymnasium import spaces
 # Global lists for simulation objects
 fires, drones, scattered_fuel, helicopters = [], [], [], []
 
+def calculate_distance(loc1, loc2):
+    return ((loc1[0] - loc2[0]) ** 2 + (loc1[1] - loc2[1]) ** 2 + (loc1[2] - loc2[2]) ** 2) ** 0.5
+
 class Fuel:
     def __init__(self, env, durability, location, fuel_type="Generic"):
         self.env = env
@@ -57,12 +60,12 @@ class Fire:
                     if distance <= 2.5:
                         print(f"Time {self.env.now}: Fire at {self.location} ignites {fuel_obj.fuel_type} at {fuel_obj.location}.")
                         fuel_obj.is_burning = True
-                        env.process(fuel_obj.burn())
-                        Fire(env, location=fuel_obj.location, durability=fuel_obj.durability if fuel_obj.fuel_type in ["bush", "tree", "house"] else 5)
+                        self.env.process(fuel_obj.burn())  # Use self.env instead of env
+                        Fire(self.env, location=fuel_obj.location, durability=fuel_obj.durability if fuel_obj.fuel_type in ["bush", "tree", "house"] else 5)
             if random.random() < 0.3:
                 nearby_location = (self.location[0] + random.randint(-3, 3),
                                    self.location[1] + random.randint(-3, 3), 0)
-                Fire(env, location=nearby_location, durability=5)
+                Fire(self.env, location=nearby_location, durability=5)
 
     def extinguish(self):
         while self.durability > 0:
@@ -79,10 +82,19 @@ class Drone:
         self.name = name
         self.battery_life = battery_life
         self.wind_speed = wind_speed
-        self.location = (start_location[0], start_location[1], random.randint(0, 10))
-        self.start_location = start_location
+        self.location = (0, 0, 1)  # Start at (0, 0, 1) to ensure positive z
+        self.start_location = (0, 0, 1)
+        self.radius = 0.5  # Add radius attribute for collision detection
         self.charging = False
         drones.append(self)
+        self.env.process(self.increase_altitude())
+
+    def increase_altitude(self):
+        # Gradually increase altitude to 5 units before starting the fly function
+        while self.location[2] < 5:
+            yield self.env.timeout(1)
+            self.location = (self.location[0], self.location[1], self.location[2] + 1)
+            print(f"Time {self.env.now}: {self.name} is increasing altitude. Current altitude: {self.location[2]}")
         self.env.process(self.fly())
 
     def fly(self):
@@ -90,33 +102,38 @@ class Drone:
             if self.battery_life <= 5 and not self.charging:
                 yield self.env.process(self.return_to_charge())
             if not self.charging:
-                # Increase altitude after leaving the drone base
-                if self.location[2] < 5:  # Target altitude is 5 units
-                    self.location = (self.location[0], self.location[1], self.location[2] + 1)
-                    print(f"Time {self.env.now}: {self.name} is increasing altitude. Current altitude: {self.location[2]}")
+                yield self.env.timeout(1)
+                self.battery_life -= 1 + abs(self.wind_speed) * 0.1
+                new_location = (
+                    self.location[0] + random.uniform(-1, 1),
+                    self.location[1] + random.uniform(-1, 1),
+                    self.location[2]
+                )
+
+                # Check for collisions with other objects
+                collision = False
+                for drone in drones:
+                    if drone != self and calculate_distance(new_location, drone.location) < self.radius + drone.radius:
+                        collision = True
+                        break
+                for fuel_obj in scattered_fuel:
+                    if calculate_distance(new_location, fuel_obj.location) < self.radius + 0.5:
+                        collision = True
+                        break
+                for fire in fires:
+                    if calculate_distance(new_location, fire.location) < self.radius + 0.5:
+                        collision = True
+                        break
+                for person in people:
+                    if calculate_distance(new_location, person.location) < self.radius + 0.5:
+                        collision = True
+                        break
+
+                if not collision:
+                    self.location = new_location
+                    print(f"Time {self.env.now}: {self.name} is flying randomly. Battery life: {self.battery_life:.2f}. Location: {self.location}")
                 else:
-                    # Avoid collisions with objects
-                    for fuel_obj in scattered_fuel:
-                        distance = ((self.location[0] - fuel_obj.location[0]) ** 2 +
-                                    (self.location[1] - fuel_obj.location[1]) ** 2 +
-                                    (self.location[2] - fuel_obj.location[2]) ** 2) ** 0.5
-                        if distance < 1.5:  # If too close to an object, adjust position
-                            self.location = (
-                                self.location[0] + random.uniform(-1, 1),
-                                self.location[1] + random.uniform(-1, 1),
-                                self.location[2]
-                            )
-                            print(f"Time {self.env.now}: {self.name} is avoiding collision. New location: {self.location}")
-                            break
-                    # Normal flight behavior
-                    yield self.env.timeout(1)
-                    self.battery_life -= 1 + abs(self.wind_speed) * 0.1
-                    self.location = (
-                        self.location[0] + random.uniform(-1, 1),
-                        self.location[1] + random.uniform(-1, 1),
-                        self.location[2]
-                    )
-                    print(f"Time {self.env.now}: {self.name} is flying. Battery life: {self.battery_life:.2f}. Location: {self.location}")
+                    print(f"Time {self.env.now}: {self.name} avoided a collision.")
 
     def return_to_charge(self):
         self.charging = True
@@ -441,13 +458,14 @@ class FireDroneRoboticsEnv(FireDroneEnv):
 
 # Example usage of the robotics environment
 def main():
+    initialize_plot()  # Ensure the plot is initialized
     env = FireDroneRoboticsEnv()
     obs = env.reset()
 
     for _ in range(200):
         action = env.action_space.sample()  # Random action
         obs, reward, done, info = env.step(action)
-        env.render()
+        env.render()  # Render the environment
         if done:
             break
 
