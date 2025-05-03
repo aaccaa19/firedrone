@@ -4,6 +4,9 @@ import random
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D, art3d
 import matplotlib.patches as patches
+import gymnasium as gym 
+import gymnasium_robotics
+from gymnasium import spaces
 
 # Global lists for simulation objects
 fires, drones, scattered_fuel, helicopters = [], [], [], []
@@ -321,6 +324,86 @@ def scatter_random_objects(env):
             while location[1] == 0 or location[0] == 0 or location in main_road_coordinates or location in side_road_coordinates or any(location in road for road in additional_road_coordinates) or any(abs(location[0] - house[0]) <= 1 and abs(location[1] - house[1]) <= 1 for house in placed_houses):
                 location = (random.randint(-10, 10), random.randint(-10, 10))
             Fuel(env, durability, location, fuel_type)
+
+class FireDroneEnv(gym.Env):
+    def __init__(self):
+        super(FireDroneEnv, self).__init__()
+        # Define the action space (e.g., move in x, y, z directions)
+        self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=float)
+
+        # Define the observation space (e.g., positions of drones, fires, etc.)
+        self.observation_space = spaces.Dict({
+            "drone_location": spaces.Box(low=-10, high=10, shape=(3,), dtype=float),
+            "fire_locations": spaces.Box(low=-10, high=10, shape=(len(fires), 3), dtype=float),
+            "fuel_locations": spaces.Box(low=-10, high=10, shape=(len(scattered_fuel), 3), dtype=float),
+        })
+
+        # Initialize the simulation environment
+        self.env = simpy.Environment()
+        self.drones = []
+        self.fires = []
+        self.fuel = scattered_fuel
+        self.step_count = 0
+
+    def reset(self):
+        # Reset the simulation environment
+        self.env = simpy.Environment()
+        self.drones = []
+        self.fires = []
+        scatter_random_objects(self.env)
+        self.drones.append(Drone(self.env, name="Drone 1", battery_life=20, wind_speed=2, start_location=(0, 0, 0)))
+        self.fires.append(Fire(self.env, location=(0, 0), durability=10))
+        self.step_count = 0
+
+        # Return the initial observation
+        return self._get_observation()
+
+    def step(self, action):
+        # Apply the action to the drone
+        drone = self.drones[0]
+        drone.location = (
+            drone.location[0] + action[0],
+            drone.location[1] + action[1],
+            drone.location[2] + action[2]
+        )
+
+        # Step the simulation environment
+        self.env.step()
+        self.step_count += 1
+
+        # Calculate reward (e.g., based on proximity to fires or extinguishing fires)
+        reward = self._calculate_reward()
+
+        # Check if the episode is done (e.g., all fires extinguished or max steps reached)
+        done = len(self.fires) == 0 or self.step_count >= 200
+
+        # Return the observation, reward, done flag, and additional info
+        return self._get_observation(), reward, done, {}
+
+    def render(self, mode="human"):
+        # Update the plot for visualization
+        update_plot()
+
+    def _get_observation(self):
+        # Return the current state of the environment
+        return {
+            "drone_location": self.drones[0].location,
+            "fire_locations": [fire.location for fire in self.fires],
+            "fuel_locations": [fuel.location for fuel in self.fuel],
+        }
+
+    def _calculate_reward(self):
+        # Example reward function: negative distance to the nearest fire
+        drone = self.drones[0]
+        if self.fires:
+            nearest_fire = min(self.fires, key=lambda fire: ((drone.location[0] - fire.location[0]) ** 2 +
+                                                             (drone.location[1] - fire.location[1]) ** 2 +
+                                                             (drone.location[2] - fire.location[2]) ** 2) ** 0.5)
+            distance = ((drone.location[0] - nearest_fire.location[0]) ** 2 +
+                        (drone.location[1] - nearest_fire.location[1]) ** 2 +
+                        (drone.location[2] - nearest_fire.location[2]) ** 2) ** 0.5
+            return -distance
+        return 0
 
 env = simpy.Environment()
 scatter_random_objects(env)
