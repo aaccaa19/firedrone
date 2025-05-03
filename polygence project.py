@@ -405,6 +405,55 @@ class FireDroneEnv(gym.Env):
             return -distance
         return 0
 
+class FireDroneRoboticsEnv(FireDroneEnv):
+    def __init__(self):
+        super(FireDroneRoboticsEnv, self).__init__()
+        # Extend the base FireDroneEnv to include robotics-specific features
+        self.robot_action_space = spaces.Box(low=-1, high=1, shape=(6,), dtype=float)  # Example: 6-DOF robot
+
+    def step(self, action):
+        # Split the action into drone and robotics components
+        drone_action = action[:3]  # First 3 values for drone movement
+        robot_action = action[3:]  # Last 3 values for robotics control
+
+        # Apply the drone action
+        self.drones[0].location = (
+            self.drones[0].location[0] + drone_action[0],
+            self.drones[0].location[1] + drone_action[1],
+            self.drones[0].location[2] + drone_action[2]
+        )
+
+        # Simulate the robot action (placeholder for actual robotics logic)
+        print(f"Robot action applied: {robot_action}")
+
+        # Step the simulation environment
+        self.env.step()
+        self.step_count += 1
+
+        # Calculate reward (e.g., based on proximity to fires or extinguishing fires)
+        reward = self._calculate_reward()
+
+        # Check if the episode is done (e.g., all fires extinguished or max steps reached)
+        done = len(self.fires) == 0 or self.step_count >= 200
+
+        # Return the observation, reward, done flag, and additional info
+        return self._get_observation(), reward, done, {}
+
+# Example usage of the robotics environment
+def main():
+    env = FireDroneRoboticsEnv()
+    obs = env.reset()
+
+    for _ in range(200):
+        action = env.action_space.sample()  # Random action
+        obs, reward, done, info = env.step(action)
+        env.render()
+        if done:
+            break
+
+if __name__ == "__main__":
+    main()
+
 env = simpy.Environment()
 scatter_random_objects(env)
 Fuel(env, durability=10, location=(0, 0))
